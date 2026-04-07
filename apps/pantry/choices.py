@@ -12,3 +12,4 @@ class ProductStatus(models.TextChoices):
     CONSUMED = "consumed", "Consumed"
     EXPIRED = "expired", "Expired"
     REMOVED = "removed", "Removed"
+    WASTED = "wasted", "Wasted"

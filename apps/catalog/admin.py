@@ -4,7 +4,7 @@ from .models import ProductCatalog, ProductMatch
 
 @admin.register(ProductCatalog)
 class ProductCatalogAdmin(admin.ModelAdmin):
-    list_display  = ["get_name_display", "brands", "category", "nutri_score", "nova_group", "barcode"]
+    list_display  = ["get_name_display", "brands", "category", "score", "nutri_score", "nova_group", "barcode"]
     search_fields = ["name_es", "name_en", "brands", "barcode"]
     list_filter   = ["category", "nutri_score", "nova_group"]
 

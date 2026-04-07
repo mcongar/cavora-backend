@@ -1,6 +1,7 @@
 from django.conf import settings
 from django.db import models
 
+from apps.catalog.choices import Category
 from common.models import BaseModel
 from .choices import AddMethod, ProductStatus
 
@@ -30,8 +31,18 @@ class UserProduct(BaseModel):
     unit = models.CharField(max_length=20, blank=True)
     expiry_date = models.DateField(null=True, blank=True)
     expiry_estimated = models.BooleanField(default=True)
+    manual_category = models.CharField(
+        max_length=20,
+        choices=Category.choices,
+        null=True,
+        blank=True,
+        help_text="When catalog_product is null: user-chosen category for hints and display.",
+    )
+    is_frozen = models.BooleanField(default=False)
+    frozen_at = models.DateField(null=True, blank=True)
     status = models.CharField(max_length=20, choices=ProductStatus.choices, default=ProductStatus.ACTIVE)
     consumed_at = models.DateTimeField(null=True, blank=True)
+    wasted_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         db_table = "user_products"

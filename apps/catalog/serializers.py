@@ -12,7 +12,7 @@ class ProductCatalogSerializer(serializers.ModelSerializer):
             "id", "barcode", "name", "brand", "category",
             "image_url", "nutri_score", "nova_group",
             "calories", "proteins", "carbs", "fats", "sugars",
-            "shelf_life_days",
+            "shelf_life_days", "is_organic", "score",
         ]
 
     def _lang(self):

@@ -34,6 +34,10 @@ class ProductCatalog(BaseModel):
     shelf_life_days = models.PositiveIntegerField(null=True, blank=True)
     last_synced_at  = models.DateTimeField(null=True, blank=True)
 
+    # Scoring
+    is_organic = models.BooleanField(default=False)
+    score = models.PositiveSmallIntegerField(null=True, blank=True)
+
     class Meta:
         db_table = "product_catalog"
         indexes = [
