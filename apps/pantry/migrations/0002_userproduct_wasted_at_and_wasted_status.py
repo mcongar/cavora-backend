@@ -1,5 +1,3 @@
-# Generated manually for WASTED status and wasted_at timestamp
-
 from django.db import migrations, models
 
 

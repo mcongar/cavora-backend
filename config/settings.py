@@ -52,6 +52,7 @@ INSTALLED_APPS = [
     "apps.catalog",
     "apps.pantry",
     "apps.alerts",
+    "apps.recipes",
 ]
 
 MIDDLEWARE = [
@@ -145,3 +146,8 @@ SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(days=1),
     "REFRESH_TOKEN_LIFETIME": timedelta(days=30),
 }
+
+# OpenAI (recipe generation — server-side only; never expose the key to clients)
+OPENAI_API_KEY = env("OPENAI_API_KEY", default="")
+OPENAI_MODEL = env("OPENAI_MODEL", default="gpt-4o-mini")
+RECIPE_AI_ENABLED = env.bool("RECIPE_AI_ENABLED", default=True)
