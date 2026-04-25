@@ -11,6 +11,16 @@ class ScanSessionAdmin(admin.ModelAdmin):
 
 @admin.register(UserProduct)
 class UserProductAdmin(admin.ModelAdmin):
-    list_display  = ["user", "display_name", "status", "expiry_date", "expiry_estimated", "add_method"]
-    list_filter   = ["status", "add_method", "expiry_estimated"]
+    list_display  = [
+        "user",
+        "display_name",
+        "status",
+        "storage",
+        "quantity",
+        "units_in_pack",
+        "expiry_date",
+        "expiry_estimated",
+        "add_method",
+    ]
+    list_filter   = ["status", "add_method", "expiry_estimated", "storage"]
     search_fields = ["user__email", "name_override"]

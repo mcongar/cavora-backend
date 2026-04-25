@@ -3,7 +3,7 @@ from django.db import models
 
 from apps.catalog.choices import Category
 from common.models import BaseModel
-from .choices import AddMethod, ProductStatus
+from .choices import AddMethod, ProductStatus, Storage
 
 
 class ScanSession(BaseModel):
@@ -40,6 +40,17 @@ class UserProduct(BaseModel):
     )
     is_frozen = models.BooleanField(default=False)
     frozen_at = models.DateField(null=True, blank=True)
+    storage = models.CharField(
+        max_length=20,
+        choices=Storage.choices,
+        default=Storage.FRIDGE,
+        help_text="User-facing location; is_frozen is kept in sync on save.",
+    )
+    units_in_pack = models.PositiveSmallIntegerField(
+        null=True,
+        blank=True,
+        help_text="When set, pieces per retail pack (e.g. 3); quantity is total pieces on the line, not limited by this.",
+    )
     status = models.CharField(max_length=20, choices=ProductStatus.choices, default=ProductStatus.ACTIVE)
     consumed_at = models.DateTimeField(null=True, blank=True)
     wasted_at = models.DateTimeField(null=True, blank=True)
@@ -57,6 +68,10 @@ class UserProduct(BaseModel):
         if self.catalog_product:
             return str(self.catalog_product)
         return self.name_override or "Unknown product"
+
+    def save(self, *args, **kwargs):
+        self.is_frozen = self.storage == Storage.FREEZER
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"{self.user} · {self.display_name}"

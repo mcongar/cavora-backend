@@ -1,13 +1,36 @@
 """
-Approximate fridge / freezer storage hints (days from reference date).
+Approximate storage hints (days from reference date): pantry, fridge, or freezer.
 
 Not food-safety advice — user-editable in the app.
 """
 from __future__ import annotations
 
 from datetime import date, timedelta
+from typing import TYPE_CHECKING, Literal
 
 from apps.catalog.choices import Category
+
+if TYPE_CHECKING:
+    pass
+
+StorageKey = Literal["pantry", "fridge", "freezer"]
+
+# Room-temperature / dry storage (despensa).
+PANTRY_SUGGEST_DAYS: dict[str, int] = {
+    Category.DAIRY: 5,
+    Category.FRUITS: 7,
+    Category.VEGETABLES: 7,
+    Category.MEAT: 2,
+    Category.FISH: 1,
+    Category.BEVERAGES: 120,
+    Category.SNACKS: 60,
+    Category.CEREALS: 120,
+    Category.FROZEN: 7,
+    Category.CONDIMENTS: 180,
+    Category.BAKERY: 5,
+    Category.CANNED: 730,
+    Category.OTHER: 30,
+}
 
 # Days until suggested "consume by" when stored in fridge (fresh).
 FRIDGE_SUGGEST_DAYS: dict[str, int] = {
@@ -43,8 +66,15 @@ FREEZER_SUGGEST_DAYS: dict[str, int] = {
     Category.OTHER: 180,
 }
 
+DEFAULT_PANTRY = 30
 DEFAULT_FRIDGE = 7
 DEFAULT_FREEZER = 180
+
+_TABLES: dict[StorageKey, tuple[dict[str, int], int]] = {
+    "pantry": (PANTRY_SUGGEST_DAYS, DEFAULT_PANTRY),
+    "fridge": (FRIDGE_SUGGEST_DAYS, DEFAULT_FRIDGE),
+    "freezer": (FREEZER_SUGGEST_DAYS, DEFAULT_FREEZER),
+}
 
 
 def effective_category(*, catalog_category: str | None, manual_category: str | None) -> str:
@@ -55,17 +85,33 @@ def effective_category(*, catalog_category: str | None, manual_category: str | N
     return Category.OTHER
 
 
-def suggest_days(*, category: str, is_frozen: bool) -> int:
-    table = FREEZER_SUGGEST_DAYS if is_frozen else FRIDGE_SUGGEST_DAYS
-    return table.get(category, DEFAULT_FREEZER if is_frozen else DEFAULT_FRIDGE)
+def suggest_days(
+    *,
+    category: str,
+    storage: StorageKey | None = None,
+    is_frozen: bool | None = None,
+) -> int:
+    """
+    Suggested days until consume-by. Prefer `storage`; if omitted, `is_frozen`
+    maps to fridge (False) or freezer (True) for backward compatibility.
+    """
+    if storage is not None:
+        key: StorageKey = storage
+    elif is_frozen is not None:
+        key = "freezer" if is_frozen else "fridge"
+    else:
+        key = "fridge"
+    table, default = _TABLES[key]
+    return table.get(category, default)
 
 
 def suggested_expiry_date(
     *,
     category: str,
-    is_frozen: bool,
     reference_date: date,
+    storage: StorageKey | None = None,
+    is_frozen: bool | None = None,
 ) -> date:
     """Recommended consume-by date from reference_date (e.g. today or frozen_at)."""
-    days = suggest_days(category=category, is_frozen=is_frozen)
+    days = suggest_days(category=category, storage=storage, is_frozen=is_frozen)
     return reference_date + timedelta(days=days)

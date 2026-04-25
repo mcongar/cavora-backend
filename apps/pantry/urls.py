@@ -9,6 +9,7 @@ from .views import (
     SessionRollbackView,
     DashboardStatsView,
     ShelfHintView,
+    SplitProductView,
 )
 
 urlpatterns = [
@@ -18,6 +19,7 @@ urlpatterns = [
     path("products/<uuid:pk>/", UserProductDetailView.as_view()),
     path("products/<uuid:pk>/consume/", ConsumeProductView.as_view()),
     path("products/<uuid:pk>/waste/", WasteProductView.as_view()),
+    path("products/<uuid:pk>/split/", SplitProductView.as_view()),
     path("sessions/", ScanSessionCreateView.as_view()),
     path("sessions/<uuid:pk>/bulk-add/", BulkAddView.as_view()),
     path("sessions/<uuid:pk>/", SessionRollbackView.as_view()),

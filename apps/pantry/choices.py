@@ -13,3 +13,11 @@ class ProductStatus(models.TextChoices):
     EXPIRED = "expired", "Expired"
     REMOVED = "removed", "Removed"
     WASTED = "wasted", "Wasted"
+
+
+class Storage(models.TextChoices):
+    """Where the user stores this line (drives hint tables and is_frozen sync)."""
+
+    PANTRY = "pantry", "Pantry"
+    FRIDGE = "fridge", "Fridge"
+    FREEZER = "freezer", "Freezer"

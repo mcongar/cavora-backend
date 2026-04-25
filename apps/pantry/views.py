@@ -1,12 +1,14 @@
 from datetime import date, timedelta
 
 from apps.catalog.choices import Category
+from apps.catalog.models import ProductCatalog
 from django.db import transaction
 from django.utils import timezone
 from rest_framework import generics, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from .choices import Storage
 from .models import UserProduct, ScanSession, ProductStatus
 from .serializers import (
     UserProductSerializer,
@@ -14,8 +16,11 @@ from .serializers import (
     UpdateUserProductSerializer,
     ScanSessionSerializer,
     BulkAddSerializer,
+    SplitProductSerializer,
+    ConsumeProductBodySerializer,
 )
-from .shelf_hints import suggested_expiry_date, suggest_days
+from .shelf_hints import effective_category, suggested_expiry_date, suggest_days
+from .storage_defaults import default_storage_for_category
 
 
 def _weighted_catalog_score(qs):
@@ -71,6 +76,10 @@ class UserProductListCreateView(generics.ListCreateAPIView):
             threshold = date.today() + timedelta(days=self.request.user.alert_days_before)
             qs = qs.filter(expiry_date__lte=threshold)
 
+        storage = self.request.query_params.get("storage")
+        if storage in (Storage.PANTRY, Storage.FRIDGE, Storage.FREEZER):
+            qs = qs.filter(storage=storage)
+
         return qs
 
     def get_serializer_class(self):
@@ -82,6 +91,17 @@ class UserProductListCreateView(generics.ListCreateAPIView):
         context = super().get_serializer_context()
         context["lang"] = self.request.user.language
         return context
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        instance = serializer.save()
+        read = UserProductSerializer(
+            instance,
+            context=self.get_serializer_context(),
+        )
+        headers = self.get_success_headers(read.data)
+        return Response(read.data, status=status.HTTP_201_CREATED, headers=headers)
 
 
 class UserProductDetailView(generics.RetrieveUpdateDestroyAPIView):
@@ -113,12 +133,37 @@ class ConsumeProductView(APIView):
             user=request.user,
             status=ProductStatus.ACTIVE
         )
-        product.status = ProductStatus.CONSUMED
-        product.consumed_at = timezone.now()
-        product.save(update_fields=["status", "consumed_at", "updated_at"])
-        return Response(
-            UserProductSerializer(product, context={"lang": request.user.language}).data
-        )
+        ser = ConsumeProductBodySerializer(data=request.data or {})
+        ser.is_valid(raise_exception=True)
+        amount = ser.validated_data.get("amount")
+        lang = request.user.language
+        now = timezone.now()
+
+        with transaction.atomic():
+            if amount is None:
+                product.status = ProductStatus.CONSUMED
+                product.consumed_at = now
+                product.quantity = 0
+                product.save(update_fields=["status", "consumed_at", "quantity", "updated_at"])
+                return Response(
+                    UserProductSerializer(product, context={"lang": lang}).data
+                )
+            if amount > product.quantity:
+                return Response(
+                    {"amount": f"Cannot consume {amount} pieces; only {product.quantity} on this line."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if amount < product.quantity:
+                product.quantity -= amount
+                product.save(update_fields=["quantity", "updated_at"])
+            else:
+                product.status = ProductStatus.CONSUMED
+                product.consumed_at = now
+                product.quantity = 0
+                product.save(update_fields=["status", "consumed_at", "quantity", "updated_at"])
+            return Response(
+                UserProductSerializer(product, context={"lang": lang}).data
+            )
 
 
 class WasteProductView(APIView):
@@ -162,16 +207,48 @@ class BulkAddView(APIView):
         with transaction.atomic():
             created = []
             for item in products_data:
+                cat_id = item.get("catalog_product_id")
+                cat_str = None
+                if cat_id:
+                    cat_str = (
+                        ProductCatalog.objects.filter(pk=cat_id)
+                        .values_list("category", flat=True)
+                        .first()
+                    )
+                st = item.get("storage")
+                if not st:
+                    if item.get("is_frozen"):
+                        st = Storage.FREEZER
+                    elif cat_str:
+                        st = default_storage_for_category(cat_str)
+                    else:
+                        st = Storage.FRIDGE
+                exp = item.get("expiry_date")
+                exp_est = item.get("expiry_estimated", True)
+                ref = item.get("frozen_at")
+                if st == Storage.FREEZER and not ref:
+                    ref = timezone.localdate()
+                if exp is None and cat_str:
+                    r = ref or timezone.localdate()
+                    exp = suggested_expiry_date(
+                        category=cat_str,
+                        reference_date=r,
+                        storage=st,
+                    )
+                    exp_est = True
                 product = UserProduct.objects.create(
                     user=request.user,
                     session=session,
                     add_method=session.method,
-                    catalog_product_id=item.get("catalog_product_id"),
+                    catalog_product_id=cat_id,
                     name_override=item.get("name_override", ""),
                     quantity=item.get("quantity", 1),
                     unit=item.get("unit", ""),
-                    expiry_date=item.get("expiry_date"),
-                    expiry_estimated=item.get("expiry_estimated", True),
+                    expiry_date=exp,
+                    expiry_estimated=exp_est,
+                    storage=st,
+                    units_in_pack=item.get("units_in_pack"),
+                    frozen_at=ref if st == Storage.FREEZER else (item.get("frozen_at") or None),
                 )
                 created.append(product)
 
@@ -252,7 +329,8 @@ class DashboardStatsView(APIView):
 
 class ShelfHintView(APIView):
     """
-    Query: ?category=meat&is_frozen=true
+    Query: ?category=meat&storage=fridge|pantry|freezer
+    Legacy: ?is_frozen=true (maps to freezer vs fridge when storage omitted)
     Optional: ?reference=YYYY-MM-DD (defaults to today).
     """
 
@@ -263,8 +341,6 @@ class ShelfHintView(APIView):
                 {"detail": "Invalid or missing category."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        raw = request.query_params.get("is_frozen", "false").lower()
-        is_frozen = raw in ("1", "true", "yes")
         ref_str = request.query_params.get("reference")
         if ref_str:
             try:
@@ -274,13 +350,104 @@ class ShelfHintView(APIView):
                 ref = timezone.localdate()
         else:
             ref = timezone.localdate()
-        days = suggest_days(category=cat, is_frozen=is_frozen)
-        exp = suggested_expiry_date(category=cat, is_frozen=is_frozen, reference_date=ref)
+
+        storage = request.query_params.get("storage")
+        if storage in ("pantry", "fridge", "freezer"):
+            st = storage
+            days = suggest_days(category=cat, storage=st)
+            exp = suggested_expiry_date(
+                category=cat,
+                reference_date=ref,
+                storage=st,
+            )
+            is_frozen = st == Storage.FREEZER
+        else:
+            raw = request.query_params.get("is_frozen", "false").lower()
+            is_frozen = raw in ("1", "true", "yes")
+            st = "freezer" if is_frozen else "fridge"
+            days = suggest_days(category=cat, is_frozen=is_frozen)
+            exp = suggested_expiry_date(
+                category=cat,
+                reference_date=ref,
+                is_frozen=is_frozen,
+            )
+
         return Response(
             {
-                "category": cat,
-                "is_frozen": is_frozen,
-                "suggested_days": days,
+                "category":            cat,
+                "storage":             st,
+                "is_frozen":            is_frozen,
+                "suggested_days":       days,
                 "suggested_expiry_date": exp.isoformat(),
             }
         )
+
+
+class SplitProductView(APIView):
+    """Create a new line from an existing one; subtract quantity from the source (or remove it)."""
+
+    def post(self, request, pk):
+        src = generics.get_object_or_404(
+            UserProduct,
+            id=pk,
+            user=request.user,
+            status=ProductStatus.ACTIVE,
+        )
+        ser = SplitProductSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        n = ser.validated_data["take_quantity"]
+        if n > src.quantity:
+            return Response(
+                {"detail": "take_quantity cannot exceed line quantity."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        st: str = ser.validated_data["storage"]
+        with transaction.atomic():
+            ref = ser.validated_data.get("frozen_at")
+            if st == Storage.FREEZER and not ref:
+                ref = timezone.localdate()
+            exp = ser.validated_data.get("expiry_date")
+            exp_est = ser.validated_data.get("expiry_estimated", True)
+            if exp is None:
+                cat_str = effective_category(
+                    catalog_category=src.catalog_product.category if src.catalog_product else None,
+                    manual_category=src.manual_category,
+                )
+                if cat_str:
+                    r = (ref or timezone.localdate()) if st == Storage.FREEZER else date.today()
+                    exp = suggested_expiry_date(
+                        category=cat_str,
+                        reference_date=r,
+                        storage=st,
+                    )
+                    exp_est = True
+            new = UserProduct(
+                user=request.user,
+                session=src.session,
+                catalog_product=src.catalog_product,
+                name_override=src.name_override,
+                add_method=src.add_method,
+                quantity=n,
+                unit=src.unit,
+                units_in_pack=src.units_in_pack,
+                expiry_date=exp,
+                expiry_estimated=exp_est,
+                manual_category=src.manual_category,
+                storage=st,
+            )
+            if st == Storage.FREEZER:
+                new.frozen_at = ref or timezone.localdate()
+            new.save()
+
+            src.quantity = src.quantity - n
+            if src.quantity < 1:
+                src.status = ProductStatus.REMOVED
+            src.save()
+            lang = request.user.language
+            return Response(
+                {
+                    "source":  UserProductSerializer(src, context={"lang": lang}).data,
+                    "created": UserProductSerializer(new, context={"lang": lang}).data,
+                },
+                status=status.HTTP_201_CREATED,
+            )
